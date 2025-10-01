@@ -1,83 +1,93 @@
-from flask import Flask, render_template, request, redirect, url_for, session
-import sqlite3
 import os
+import sqlite3
+from flask import Flask, render_template, request, redirect, url_for, session, flash
+from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
-app.secret_key = "clave_secreta"
+app.secret_key = "supersecretkey"  # cámbialo por algo más seguro en producción
 
 DB_NAME = "usuarios.db"
 
-# 📌 Crear tabla si no existe
+# --------------------------
+# Inicialización de la base de datos
+# --------------------------
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    c.execute('''
+    c.execute("""
         CREATE TABLE IF NOT EXISTS usuarios (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT UNIQUE NOT NULL,
             password TEXT NOT NULL
         )
-    ''')
+    """)
     conn.commit()
     conn.close()
 
-# 📌 Página principal
+# --------------------------
+# Rutas
+# --------------------------
 @app.route("/")
 def index():
-    if "username" in session:
-        return redirect(url_for("home"))
-    return render_template("login.html")
+    return redirect(url_for("login"))  # redirigir al login directamente
 
-# 📌 Login
-@app.route("/login", methods=["POST"])
-def login():
-    username = request.form["username"]
-    password = request.form["password"]
-
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute("SELECT * FROM usuarios WHERE username=? AND password=?", (username, password))
-    user = c.fetchone()
-    conn.close()
-
-    if user:
-        session["username"] = username
-        return redirect(url_for("home"))
-    else:
-        return "Usuario o contraseña incorrectos"
-
-# 📌 Registro
-@app.route("/register", methods=["POST"])
+@app.route("/register", methods=["GET", "POST"])
 def register():
-    username = request.form["username"]
-    password = request.form["password"]
+    if request.method == "POST":
+        username = request.form["username"]
+        password = request.form["password"]
+        hashed_pw = generate_password_hash(password)
 
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    try:
-        c.execute("INSERT INTO usuarios (username, password) VALUES (?, ?)", (username, password))
-        conn.commit()
-    except sqlite3.IntegrityError:
-        return "El usuario ya existe"
-    finally:
+        try:
+            conn = sqlite3.connect(DB_NAME)
+            c = conn.cursor()
+            c.execute("INSERT INTO usuarios (username, password) VALUES (?, ?)", (username, hashed_pw))
+            conn.commit()
+            conn.close()
+            flash("Usuario registrado con éxito. Inicia sesión.", "success")
+            return redirect(url_for("login"))
+        except sqlite3.IntegrityError:
+            flash("El usuario ya existe. Intenta con otro nombre.", "danger")
+            return redirect(url_for("register"))
+
+    return render_template("register.html")
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "POST":
+        username = request.form["username"]
+        password = request.form["password"]
+
+        conn = sqlite3.connect(DB_NAME)
+        c = conn.cursor()
+        c.execute("SELECT password FROM usuarios WHERE username = ?", (username,))
+        user = c.fetchone()
         conn.close()
 
-    return redirect(url_for("index"))
+        if user and check_password_hash(user[0], password):
+            session["username"] = username
+            return redirect(url_for("home"))
+        else:
+            flash("Usuario o contraseña incorrectos.", "danger")
+            return redirect(url_for("login"))
 
-# 📌 Página de inicio
+    return render_template("login.html")
+
 @app.route("/home")
 def home():
-    if "username" in session:
-        return f"Bienvenido {session['username']}! <br><a href='/logout'>Cerrar sesión</a>"
-    return redirect(url_for("index"))
+    if "username" not in session:
+        return redirect(url_for("login"))
+    return render_template("home.html", username=session["username"])
 
-# 📌 Logout
 @app.route("/logout")
 def logout():
-    session.pop("username", None)
-    return redirect(url_for("index"))
+    session.clear()
+    return redirect(url_for("login"))
 
-# 📌 Ejecutar
+# --------------------------
+# Main
+# --------------------------
 if __name__ == "__main__":
-    init_db()  # ✅ Crea la base de datos y la tabla si no existen
-    app.run(debug=True, host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
+    init_db()
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host="0.0.0.0", port=port)
